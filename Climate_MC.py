@@ -326,7 +326,7 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
 
     slice_step = int(1/tstep)
             
-    #Attempting to account for uncertainty in cc-fb, which is +/- 100% through a normal
+    #Attempting to account for uncertainty in cc-fb, which is +/- 100% through a triang
     #distribution. This is based on the footnote of AR5 Table 8.7 that the uncertainties
     #in magnitude of cc-fb are comparable in size to the effect.
     ccfb_dist = sp.stats.triang.rvs(1, scale=2, size=runs, random_state=RS)
