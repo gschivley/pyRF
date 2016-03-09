@@ -16,6 +16,7 @@ the uncertainties cc-fb are comparable in magnitude to the size of the effect.
 ## Current status
 
 The python code is set up as a script with functions for CO<sub>2</sub> and CH<sub>4</sub>. The following items are on the near term to-do list:
+
 1. Add classes
 2. Add uncertainty for fraction of CH4 decomposition to CO<sub>2</sub> (currently fixed at 51%)
 3. Add uncertainty for CO<sub>2</sub> IRF in the CH4 function (CO<sub>2</sub> from CH<sub>4</sub> decomposition)
