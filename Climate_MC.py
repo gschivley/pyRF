@@ -173,7 +173,7 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
         tau3=df_exp['t3'].values
     
     
-        while count < runs:
+        while count < runs: #Is there a way to do this in parallel?
             A0 = a0[count]
             A1 = a1[count]
             A2 = a2[count]
@@ -366,13 +366,16 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                 ch4_re = RE_total[count]
                 co2_re = CO2RE[count]
                 
-				# Calculation of CH4 and CO2 in atmosphere over time
+				# Calculation of CH4 and CO2 in atmosphere over time.
+				# Need to add uncertainty in CO2 from decomposition here.
                 ch4_atmos = np.resize(fftconvolve(CH4_AR5(time, ch4_tau), emiss),
                                   time.size) * tstep
                 co2 = np.resize(fftconvolve(ch42co2(time, CH4tau=ch4_tau), emiss),
                             time.size) * tstep
                 
-                #Still need to add uncertainty here?
+                #Still need to add uncertainty here? In this spot I'm calculating a 
+                #single run. The CO2 function is for multiple runs. Need to figure out.
+                              
                 co2_atmos = np.resize(fftconvolve(CO2_AR5(time), co2),
                                   time.size) * tstep
             
