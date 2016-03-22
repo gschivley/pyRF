@@ -33,10 +33,22 @@ def f3(t):
     return a3*np.exp(-t/tau3)
     
 
-def CO2_AR5(t, a0=0.2173, a1=0.224, a2=0.2824, a3=0.2763, tau1=394.4,
-            tau2=36.54, tau3=4.304):
+def CO2_AR5(t, **kwargs):
+    """ Returns the IRF for CO2 using parameter values from IPCC AR5/Joos et al (2013)
+    
+    Keyword arguments are parameter values.
+    """
+    
+    a0 = kwargs.get('a0', 0.2173)
+    a1 = kwargs.get('a1', 0.224)
+    a2 = kwargs.get('a2', 0.2824)
+    a3 = kwargs.get('a3', 0.2763)
+    tau1 = kwargs.get('tau1', 394.4)
+    tau2 = kwargs.get('tau2', 36.54)
+    tau3 = kwargs.get('tau3', 4.304)            
+    
     IRF = a0 + a1*np.exp(-t/tau1) + a2*np.exp(-t/tau2) + a3*np.exp(-t/tau3)
-    return IRF #f0(t) + f1(t) + f2(t) + f3(t)
+    return IRF 
     
 #Methane response fuction
 
@@ -103,7 +115,7 @@ def Alt_high_GTP(t):
 
 
 def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='AR5',
-         runs=1, RS=1, full_output=False):
+         runs=1, RS=1, full_output=False, **kwargs):
     """
     a0=0.2173, a1=0.224, a2=0.2824, a3=0.2763, tau1=394.4, tau2=36.54, tau3=4.304,
         RE=1.756E-15,
@@ -122,6 +134,10 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
     RS: Random state initiator for continuity between calls
     full_output: When True, outputs the results from all runs as an array in addition to
     the mean and +/- sigma as a DataFrame
+    
+    Keyword arguments are used to pass random IRF parameter values for a single run as
+    part of a larger monte carlo calculation (currently limited to CH4 decomposing to
+    CO2 in the *CH4* function).
     """
     if min(years) > 0:
         years = years - min(years)
@@ -174,17 +190,16 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
     
     
         while count < runs: #Is there a way to do this in parallel?
-            A0 = a0[count]
-            A1 = a1[count]
-            A2 = a2[count]
-            A3 = a3[count]
-            Tau1 = tau1[count]
-            Tau2 = tau2[count]
-            Tau3 = tau3[count]
+            co2_kwargs = {'a1' : a1[count], 
+                        'a2' : a2[count], 
+                        'a3' : a3[count],
+                        'tau1' : tau1[count],
+                        'tau2' : tau2[count],
+                        'tau3' : tau3[count]}
             CO2_re = RE[count]
             
-            atmos = np.resize(fftconvolve(CO2_AR5(time, a0=A0, a1=A1, a2=A2, a3=A3, 
-            tau1=Tau1, tau2=Tau2, tau3=Tau3), inter_emissions), time.size) * tstep
+            atmos = np.resize(fftconvolve(CO2_AR5(time, **co2_kwargs), 
+                              inter_emissions), time.size) * tstep
             rf = atmos * CO2_re
             
             
@@ -248,7 +263,8 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                  
     else:
         CO2_re=1.756E-15            
-        atmos = np.resize(fftconvolve(CO2_AR5(time), inter_emissions), time.size) * tstep
+        atmos = np.resize(fftconvolve(CO2_AR5(time, **kwargs), 
+                            inter_emissions), time.size) * tstep
         rf = atmos * CO2_re
         
         if kind == 'RF':
@@ -331,6 +347,9 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
     #in magnitude of cc-fb are comparable in size to the effect.
     ccfb_dist = sp.stats.triang.rvs(1, scale=2, size=runs, random_state=RS)
     
+ 
+    
+      
     if runs == 1:
         co2_re = 1.756E-15
         ch4_re = 1.277E-13 * 1.65
@@ -355,6 +374,37 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
             # 90% CI is +/- 10% of mean. Divide by 1.64 to find sigma
             CO2RE = norm.rvs(1.756e-15, 1.756e-15 * 0.1 / 1.64, size=runs, 
                             random_state=RS+4)
+                            
+            #Uncertainty in CH4 decomposition to CO2. Boucher et al (2009) use a lower 
+            #bound of 51% and an upper bound of 100%. GWP calculations in AR5 assume 51% 
+            #(personal communication - find email to cite). Using a uniform distribution 
+            #here for now.
+            alpha_dist = sp.stats.uniform.rvs(loc=0.51, scale=0.49, 
+                                              size=runs, random_state=RS)
+            
+            # sigma and x are from Olivie and Peters (2013) Table 5 (J13 values)
+            # They are the covariance and mean arrays for CO2 IRF uncertainty
+            sigma = np.array([[0.129, -0.058, 0.017, -0.042, -0.004, -0.009],
+                            [-0.058, 0.167,	-0.109,	0.072, -0.015,	0.003],
+                            [0.017,	-0.109,	0.148,	-0.043,	0.013,	-0.013],
+                            [-0.042, 0.072,	-0.043,	0.090,	0.009,	0.006],
+                            [-0.004, -0.015, 0.013,	0.009,	0.082,	0.013],
+                            [-0.009, 0.003,	-0.013,	0.006,	0.013,	0.046]])
+                            
+            x = np.array([5.479, 2.913,	0.496, 0.181, 0.401, -0.472])
+
+            data = multivariate_normal.rvs(x,sigma, runs, random_state=RS)
+            data_df = pd.DataFrame(data, columns=['t1', 't2', 't3', 'b1','b2','b3'])
+            df_exp = np.exp(data_df)
+            
+            a0 = 1 / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
+            a1 = df_exp['b1'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
+            a2 = df_exp['b2'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
+            a3 = df_exp['b3'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
+
+            tau1=df_exp['t1'].values
+            tau2=df_exp['t2'].values
+            tau3=df_exp['t3'].values
             
             while count < runs:
                 
@@ -366,17 +416,28 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                 ch4_re = RE_total[count]
                 co2_re = CO2RE[count]
                 
+                #CO2 IRF parameter values
+                co2_kwargs = {'a0' : a0[count], 
+                              'a1' : a1[count], 
+                              'a2' : a2[count], 
+                              'a3' : a3[count],
+                              'tau1' : tau1[count],
+                              'tau2' : tau2[count],
+                              'tau3' : tau3[count]}
+                
+                #Percent of CH4 that decays to CO2
+                alpha = alpha_dist[count]
+                
 				# Calculation of CH4 and CO2 in atmosphere over time.
-				# Need to add uncertainty in CO2 from decomposition here.
                 ch4_atmos = np.resize(fftconvolve(CH4_AR5(time, ch4_tau), emiss),
                                   time.size) * tstep
-                co2 = np.resize(fftconvolve(ch42co2(time, CH4tau=ch4_tau), emiss),
+                co2 = np.resize(fftconvolve(ch42co2(time, ch4_tau, alpha), emiss),
                             time.size) * tstep
                 
-                #Still need to add uncertainty here? In this spot I'm calculating a 
-                #single run. The CO2 function is for multiple runs. Need to figure out.
-                              
-                co2_atmos = np.resize(fftconvolve(CO2_AR5(time), co2),
+                #I've now included uncertainty here, but the code is pretty sloppy. Need
+                #to clean it up soon, maybe use the *CO2* function to include uncertainty
+                #rather than copying the multivariate normal stuff in here.                              
+                co2_atmos = np.resize(fftconvolve(CO2_AR5(time, **co2_kwargs), co2),
                                   time.size) * tstep
             
                 # Forcing from CH4 and CO2
