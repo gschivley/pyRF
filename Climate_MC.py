@@ -11,26 +11,12 @@ from scipy.interpolate import interp1d
 from scipy.signal import fftconvolve
 from scipy.integrate import cumtrapz
 from scipy.stats import multivariate_normal, norm
-from numba import jit
 import pandas as pd
 import random
 
 
 # Radiative efficiencies of each gas, calculated from AR5 & AR5 SM
 co2_re, ch4_re, n2o_re, sf6_re = 1.756E-15, 1.277E-13 * 1.65, 3.845E-13, 2.010E-11
-
-# AR5 2013 IRF values
-a0, a1, a2, a3 = 0.2173, 0.224, 0.2824, 0.2763
-tau1, tau2, tau3 = 394.4, 36.54, 4.304
-
-def f0(t):
-    return a0
-def f1(t):
-    return a1*np.exp(-t/tau1)
-def f2(t):
-    return a2*np.exp(-t/tau2)
-def f3(t):
-    return a3*np.exp(-t/tau3)
     
 
 def CO2_AR5(t, **kwargs):
@@ -74,41 +60,6 @@ def AR5_GTP(t):
     c1, c2, d1, d2 = 0.631, 0.429, 8.4, 409.5
     """ The default response function for radiative forcing from AR5. Source is \
     Boucher (2008). ECR is 3.9K, which is on the high side.
-    Convolve with radiative forcing to get temperature.
-    """
-    return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
-
-def Alt_GTP(t):
-    c1, c2, d1, d2 = 0.43, 0.32, 2.57, 82.24
-    """ The response function for radiative forcing. Taken from Olivie and Peters (2013),
-    Table 4, using the CMIP5 data. This has a slightly lower climate response value than
-    Boucher (2008), which is used in AR5.
-    Convolve with radiative forcing to get temperature.
-    """
-    return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
-
-def Alt_low_GTP(t):
-    c1, c2, d1, d2 = 0.43 / (1 + 0.29), 0.32 / (1 + 0.59), 2.57 * 1.46, 82.24 * 2.92
-    #c1, c2, d1, d2 = 0.48 * (1 - 0.3), 0.20 * (1 - 0.52), 7.15 * 1.35, 105.55 * 1.38
-    #c1, c2, d1, d2 = 0.48 * (1 - 0.3), 0.20 * (1 - 0.52), 7.15, 105.55
-    #c1, c2, d1, d2 = 0.631 * 0.7, 0.429 * 0.7, 8.4, 409.5
-    """ The response function for radiative forcing. Taken from Olivie and Peters (2013),
-    Table 4, using the CMIP5 data. This has a lower climate response value than AR5.
-    The uncertainty in Table 4 assumes lognormal distributions, which is why values less
-    than the median are determined by dividing by (1 + uncertainty).
-    Convolve with radiative forcing to get temperature.
-    """
-    return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
-
-def Alt_high_GTP(t):
-    c1, c2, d1, d2 = 0.43 * 1.29, 0.32 * 1.59, 2.57 / (1 + 0.46), 82.24 / (1 + 1.92)
-    #c1, c2, d1, d2 = 0.48 * 1.3, 0.20 * 1.52, 7.15 * (1 - 0.35), 105.55 * (1 - 0.38)
-    #c1, c2, d1, d2 = 0.48 * 1.2, 0.20 * 1.52, 7.15, 105.55
-    #c1, c2, d1, d2 = 0.631, 0.429 * 1.3, 8.4, 409.5    
-    """ The response function for radiative forcing. Taken from Olivie and Peters (2013),
-    Table 4, using the CMIP5 data. This has a higher climate response value than AR5.
-    The uncertainty in Table 4 assumes lognormal distributions, which is why values less
-    than the median are determined by dividing by (1 + uncertainty).
     Convolve with radiative forcing to get temperature.
     """
     return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
@@ -269,20 +220,15 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
         
         if kind == 'RF':
             return rf[0::slice_step]
+            
         elif kind == 'CRF':
             crf = cumtrapz(rf, dx = tstep, initial = 0)
+            
             return crf[0::slice_step]
+            
         elif kind == 'temp':
-            if source == 'AR5':
-                temp = np.resize(fftconvolve(AR5_GTP(time), rf), time.size) * tstep
-            elif source == 'Alt':
-                temp = np.resize(fftconvolve(Alt_GTP(time), rf), time.size) * tstep
-            elif source == 'Alt_low':
-                temp = np.resize(fftconvolve(Alt_low_GTP(time), rf), 
-                                time.size) * tstep
-            elif source == 'Alt_high':
-                temp = np.resize(fftconvolve(Alt_high_GTP(time), rf), 
-                                time.size) * tstep
+            temp = np.resize(fftconvolve(AR5_GTP(time), rf), time.size) * tstep
+
             return temp[0::slice_step]
         
 
@@ -292,6 +238,7 @@ def ch42co2(t, CH4tau=12.4, alpha=0.51):
     function with the methane emission profile gives the CO2 emission profile.
     
     t: time
+    CH4tau: adjusted lifetime of methane
     alpha: fraction of methane converted to CO2
     """
     #ch4tau = 12.4
@@ -444,8 +391,8 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                 rf = ch4_atmos * ch4_re + co2_atmos * co2_re
             
                 # Additional forcing from cc-fb
-                if cc_fb == True: #I need to set up cc_fb for MC still
-				    #Accounting for uncertainty through normal distribution
+                if cc_fb == True: 
+
                     cc_co2 = CH4_cc_tempforrf(emiss, time) * gamma * ccfb_dist[count]
                     cc_co2_atmos = np.resize(fftconvolve(CO2_AR5(time), cc_co2),
                                       time.size) * tstep
@@ -505,13 +452,6 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
             
                     full_output = results[0::slice_step]
 
-                #elif kind == 'CRF':
-                #    crf = cumtrapz(results, dx = tstep, initial = 0, axis=0)
-                #    output['mean'] = np.mean(crf[0::slice_step], axis=1)
-                #    output['-sigma'] = output['mean'] - np.std(crf[0::slice_step], axis=1)
-                #    output['+sigma'] = output['mean'] + np.std(crf[0::slice_step], axis=1)
-            
-                #    full_output = crf[0::slice_step]
             
                 return output, full_output
         
@@ -584,9 +524,10 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
             
                 rf = ch4_atmos * ch4_re
             
-                # Additional CO2 emissions from cc-fb
-                if cc_fb == True: #I need to set up cc_fb for MC still
-				    #Accounting for uncertainty through normal distribution
+            
+                # Additional forcing from cc-fb
+                if cc_fb == True: 
+
                     cc_co2 = CH4_cc_tempforrf(emiss, time) * gamma * ccfb_dist[count]
                     cc_co2_atmos = np.resize(fftconvolve(CO2_AR5(time), cc_co2),
                                       time.size) * tstep
@@ -619,12 +560,7 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                     output['+sigma'] = output['mean'] + np.std(results[0::slice_step], 
                                                                 axis=1)
 
-                #elif kind == 'CRF':
-                #    crf = cumtrapz(results, dx = tstep, initial = 0, axis=0)
-                #    output['mean'] = np.mean(crf[0::slice_step], axis=1)
-                #    output['-sigma'] = output['mean'] - np.std(crf[0::slice_step], axis=1)
-                #    output['+sigma'] = output['mean'] + np.std(crf[0::slice_step], axis=1)
-                
+
                 return output
     
             elif full_output == True:
@@ -646,14 +582,7 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
             
                     full_output = results[0::slice_step]
 
-                #elif kind == 'CRF':
-                #    crf = cumtrapz(results, dx = tstep, initial = 0, axis=0)
-                #    output['mean'] = np.mean(crf[0::slice_step], axis=1)
-                #    output['-sigma'] = output['mean'] - np.std(crf[0::slice_step], axis=1)
-                #    output['+sigma'] = output['mean'] + np.std(crf[0::slice_step], axis=1)
-            
-                #    full_output = crf[0::slice_step]
-            
+
                 return output, full_output
                 
         # No CH4 decay, no MC
@@ -717,11 +646,6 @@ def CH4_cc_tempforrf(emission, years, tstep=0.01, kind='linear', source='AR5',
         rf = ch4_atmos * ch4_re
     if source == 'AR5':
         temp = np.resize(fftconvolve(AR5_GTP(time), rf), time.size) * tstep
-    elif source == 'Alt':
-        temp = np.resize(fftconvolve(Alt_GTP(time), rf), time.size) * tstep
-    elif source == 'Alt_low':
-        temp = np.resize(fftconvolve(Alt_low_GTP(time), rf), time.size) * tstep
-    elif source == 'Alt_high':
-        temp = np.resize(fftconvolve(Alt_high_GTP(time), rf), time.size) * tstep
+
     
     return temp
