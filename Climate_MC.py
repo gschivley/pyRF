@@ -13,6 +13,8 @@ from scipy.integrate import cumtrapz
 from scipy.stats import multivariate_normal, norm
 import pandas as pd
 import random
+import multiprocessing
+from joblib import Parallel, delayed
 
 
 # Radiative efficiencies of each gas, calculated from AR5 & AR5 SM
@@ -64,6 +66,42 @@ def AR5_GTP(t):
     """
     return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
 
+def CO2_rf(emission, time, tstep=0.01, **kwargs):
+    """
+    Convolution of emission with IRF to calculate mass in atmosphere. Multiply by the RE
+    of CO2 to get forcing over time for a single run.
+    
+    emission: an equally spaced array of emissions
+    time: an equally spaced array of years at which the emissions take place
+    tstep: time step between emission array values
+    
+    Keyword Arguments: CO2 IRF and RE parameters. Default values are provided.
+    
+    """
+    a0 = kwargs.get('a0', 0.2173)
+    a1 = kwargs.get('a1', 0.224)
+    a2 = kwargs.get('a2', 0.2824)
+    a3 = kwargs.get('a3', 0.2763)
+    tau1 = kwargs.get('tau1', 394.4)
+    tau2 = kwargs.get('tau2', 36.54)
+    tau3 = kwargs.get('tau3', 4.304)
+    RE = kwargs.get('RE', 1.756e-15)
+    
+    co2_kwargs = {'a0': a0,
+                'a1': a1, 
+                'a2': a2,
+                'a3': a3,
+                'tau1': tau1,
+                'tau2': tau2,
+                'tau3': tau3}
+    
+    atmos = np.resize(fftconvolve(CO2_AR5(time, **co2_kwargs), 
+                  emission), time.size) * tstep
+    
+    forcing = atmos * RE
+                  
+    return forcing
+
 
 def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='AR5',
          runs=1, RS=1, full_output=False, **kwargs):
@@ -97,11 +135,13 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
     f = interp1d(years, emission, kind=interpolation)
     time = np.linspace(years[0], end, end/tstep + 1)    
     inter_emissions = f(time)
-    results = np.zeros((len(time), runs))
+    #results = np.zeros((len(time), runs))
     count = 0
     slice_step = int(1/tstep)
     
     if runs > 1:
+        #Number of CPU cores available for multiprocessing
+        n_cores = multiprocessing.cpu_count()
         
         # sigma and x are from Olivie and Peters (2013) Table 5 (J13 values)
         # They are the covariance and mean arrays for CO2 IRF uncertainty
@@ -138,8 +178,28 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
         tau1=df_exp['t1'].values
         tau2=df_exp['t2'].values
         tau3=df_exp['t3'].values
+        
+        #Creating a dict of keyword arguments to pass through to the CO2_rf function
+        #in a monte carlo calculation
+        kwargs = {}
+
+        for count in np.arange(runs):
+            kwargs[count] = {'a1' : a1[count], 
+                        'a2' : a2[count], 
+                        'a3' : a3[count],
+                        'tau1' : tau1[count],
+                        'tau2' : tau2[count],
+                        'tau3' : tau3[count],
+                        'RE' : RE[count]}
+
+        #Using joblib to do convolution calculations in parallel
+        list_rf = Parallel(n_jobs=n_cores)(delayed(CO2_rf)(emission, time, **kwargs[i]) 
+                                            for i in np.arange(runs))
+        
+        #Convert list of results to an array
+        results = np.asarray(list_rf)    
     
-    
+        """
         while count < runs: #Is there a way to do this in parallel?
             co2_kwargs = {'a1' : a1[count], 
                         'a2' : a2[count], 
@@ -162,6 +222,7 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                 results[:,count] = rf
             
             count += 1
+        """
         
         if full_output == False:
             output = pd.DataFrame(columns = ['mean', '-sigma', '+sigma'])    
