@@ -160,20 +160,14 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
     
         df_exp = np.exp(data_df)
     
+        #Calculation of parameter values using Eqs 13 & 14 from Olivie and Peters (2013)
         a0 = 1 / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
         a1 = df_exp['b1'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
         a2 = df_exp['b2'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
         a3 = df_exp['b3'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
-    
-        #a = pd.concat([A0, A1, A2, A3], axis=1)
         
         # 90% CI is +/- 10% of mean. Divide by 1.64 to find sigma
         RE = norm.rvs(1.756e-15, 1.756e-15 * .1 / 1.64, size=runs, random_state=RS+1)
-    
-        #a0=a['A0'].values
-        #a1=a['A1'].values
-        #a2=a['A2'].values
-        #a3=a['A3'].values
     
         tau1=df_exp['t1'].values
         tau2=df_exp['t2'].values
