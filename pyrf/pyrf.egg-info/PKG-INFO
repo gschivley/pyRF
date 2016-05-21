@@ -1,0 +1,10 @@
+Metadata-Version: 1.0
+Name: pyrf
+Version: 0.1
+Summary: Calculate radiative forcing from GHG emissions
+Home-page: https://github.com/gschivley/pyRF
+Author: Greg Schivley
+Author-email: greg.schivley@gmail.com
+License: MIT
+Description: UNKNOWN
+Platform: UNKNOWN

@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Feb 18 16:09:30 2014
-@author: Greg
-"""
-
-
 import numpy as np
 import scipy as sp
 from scipy.interpolate import interp1d
@@ -13,12 +6,23 @@ from scipy.integrate import cumtrapz
 from scipy.stats import multivariate_normal, norm
 import pandas as pd
 import random
-import multiprocessing
-from joblib import Parallel, delayed
 
 
 # Radiative efficiencies of each gas, calculated from AR5 & AR5 SM
 co2_re, ch4_re, n2o_re, sf6_re = 1.756E-15, 1.277E-13 * 1.65, 3.845E-13, 2.010E-11
+
+# AR5 2013 IRF values
+a0, a1, a2, a3 = 0.2173, 0.224, 0.2824, 0.2763
+tau1, tau2, tau3 = 394.4, 36.54, 4.304
+
+def f0(t):
+    return a0
+def f1(t):
+    return a1*np.exp(-t/tau1)
+def f2(t):
+    return a2*np.exp(-t/tau2)
+def f3(t):
+    return a3*np.exp(-t/tau3)
     
 
 def CO2_AR5(t, **kwargs):
@@ -66,16 +70,44 @@ def AR5_GTP(t):
     """
     return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
 
-def CO2_rf(emission, time, tstep=0.01, **kwargs):
+def Alt_GTP(t):
+    c1, c2, d1, d2 = 0.43, 0.32, 2.57, 82.24
+    """ The response function for radiative forcing. Taken from Olivie and Peters (2013),
+    Table 4, using the CMIP5 data. This has a slightly lower climate response value than
+    Boucher (2008), which is used in AR5.
+    Convolve with radiative forcing to get temperature.
     """
-    Convolution of emission with IRF to calculate mass in atmosphere. Multiply by the RE
-    of CO2 to get forcing over time for a single run.
-    
-    emission: an equally spaced array of emissions
-    time: an equally spaced array of years at which the emissions take place
-    tstep: time step between emission array values
-    
-    Keyword Arguments: CO2 IRF and RE parameters. Default values are provided.
+    return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
+
+def Alt_low_GTP(t):
+    c1, c2, d1, d2 = 0.43 / (1 + 0.29), 0.32 / (1 + 0.59), 2.57 * 1.46, 82.24 * 2.92
+    #c1, c2, d1, d2 = 0.48 * (1 - 0.3), 0.20 * (1 - 0.52), 7.15 * 1.35, 105.55 * 1.38
+    #c1, c2, d1, d2 = 0.48 * (1 - 0.3), 0.20 * (1 - 0.52), 7.15, 105.55
+    #c1, c2, d1, d2 = 0.631 * 0.7, 0.429 * 0.7, 8.4, 409.5
+    """ The response function for radiative forcing. Taken from Olivie and Peters (2013),
+    Table 4, using the CMIP5 data. This has a lower climate response value than AR5.
+    The uncertainty in Table 4 assumes lognormal distributions, which is why values less
+    than the median are determined by dividing by (1 + uncertainty).
+    Convolve with radiative forcing to get temperature.
+    """
+    return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
+
+def Alt_high_GTP(t):
+    c1, c2, d1, d2 = 0.43 * 1.29, 0.32 * 1.59, 2.57 / (1 + 0.46), 82.24 / (1 + 1.92)
+    #c1, c2, d1, d2 = 0.48 * 1.3, 0.20 * 1.52, 7.15 * (1 - 0.35), 105.55 * (1 - 0.38)
+    #c1, c2, d1, d2 = 0.48 * 1.2, 0.20 * 1.52, 7.15, 105.55
+    #c1, c2, d1, d2 = 0.631, 0.429 * 1.3, 8.4, 409.5    
+    """ The response function for radiative forcing. Taken from Olivie and Peters (2013),
+    Table 4, using the CMIP5 data. This has a higher climate response value than AR5.
+    The uncertainty in Table 4 assumes lognormal distributions, which is why values less
+    than the median are determined by dividing by (1 + uncertainty).
+    Convolve with radiative forcing to get temperature.
+    """
+    return c1/d1*np.exp(-t/d1) + c2/d2*np.exp(-t/d2)
+
+def CO2_mass(emission, time, tstep=0.01, **kwargs):
+    """
+    Just the convolution of emission with IRF to calculate mass in atmosphere
     
     """
     a0 = kwargs.get('a0', 0.2173)
@@ -85,23 +117,14 @@ def CO2_rf(emission, time, tstep=0.01, **kwargs):
     tau1 = kwargs.get('tau1', 394.4)
     tau2 = kwargs.get('tau2', 36.54)
     tau3 = kwargs.get('tau3', 4.304)
-    RE = kwargs.get('RE', 1.756e-15)
     
-    co2_kwargs = {'a0': a0,
-                'a1': a1, 
-                'a2': a2,
-                'a3': a3,
-                'tau1': tau1,
-                'tau2': tau2,
-                'tau3': tau3}
+    
     
     atmos = np.resize(fftconvolve(CO2_AR5(time, **co2_kwargs), 
                   emission), time.size) * tstep
-    
-    forcing = atmos * RE
                   
-    return forcing
-
+    return atmos
+    
 
 def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='AR5',
          runs=1, RS=1, full_output=False, **kwargs):
@@ -135,13 +158,11 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
     f = interp1d(years, emission, kind=interpolation)
     time = np.linspace(years[0], end, end/tstep + 1)    
     inter_emissions = f(time)
-    #results = np.zeros((len(time), runs))
+    results = np.zeros((len(time), runs))
     count = 0
     slice_step = int(1/tstep)
     
     if runs > 1:
-        #Number of CPU cores available for multiprocessing
-        n_cores = multiprocessing.cpu_count()
         
         # sigma and x are from Olivie and Peters (2013) Table 5 (J13 values)
         # They are the covariance and mean arrays for CO2 IRF uncertainty
@@ -160,11 +181,12 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
     
         df_exp = np.exp(data_df)
     
-        #Calculation of parameter values using Eqs 13 & 14 from Olivie and Peters (2013)
         a0 = 1 / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
         a1 = df_exp['b1'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
         a2 = df_exp['b2'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
         a3 = df_exp['b3'] / (1 + df_exp['b1'] + df_exp['b2'] + df_exp['b3'])
+    
+        #a = pd.concat([A0, A1, A2, A3], axis=1)
         
         # 90% CI is +/- 10% of mean. Divide by 1.64 to find sigma
         RE = norm.rvs(1.756e-15, 1.756e-15 * .1 / 1.64, size=runs, random_state=RS+1)
@@ -172,29 +194,9 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
         tau1=df_exp['t1'].values
         tau2=df_exp['t2'].values
         tau3=df_exp['t3'].values
-        
-        #Creating a dict of keyword arguments to pass through to the CO2_rf function
-        #in a monte carlo calculation
-        kwargs = {}
-
-        for count in np.arange(runs):
-            kwargs[count] = {'a1' : a1[count], 
-                        'a2' : a2[count], 
-                        'a3' : a3[count],
-                        'tau1' : tau1[count],
-                        'tau2' : tau2[count],
-                        'tau3' : tau3[count],
-                        'RE' : RE[count]}
-
-        #Using joblib to do convolution calculations in parallel
-        list_rf = Parallel(n_jobs=n_cores)(delayed(CO2_rf)(emission, time, **kwargs[i]) 
-                                            for i in np.arange(runs))
-        
-        #Convert list of results to an array
-        results = np.asarray(list_rf)    
     
-        """
-        while count < runs: #Is there a way to do this in parallel?
+    
+        for count in np.arange(runs): #Is there a way to do this in parallel?
             co2_kwargs = {'a1' : a1[count], 
                         'a2' : a2[count], 
                         'a3' : a3[count],
@@ -216,7 +218,6 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                 results[:,count] = rf
             
             count += 1
-        """
         
         if full_output == False:
             output = pd.DataFrame(columns = ['mean', '-sigma', '+sigma'])    
@@ -275,15 +276,20 @@ def CO2(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
         
         if kind == 'RF':
             return rf[0::slice_step]
-            
         elif kind == 'CRF':
             crf = cumtrapz(rf, dx = tstep, initial = 0)
-            
             return crf[0::slice_step]
-            
         elif kind == 'temp':
-            temp = np.resize(fftconvolve(AR5_GTP(time), rf), time.size) * tstep
-
+            if source == 'AR5':
+                temp = np.resize(fftconvolve(AR5_GTP(time), rf), time.size) * tstep
+            elif source == 'Alt':
+                temp = np.resize(fftconvolve(Alt_GTP(time), rf), time.size) * tstep
+            elif source == 'Alt_low':
+                temp = np.resize(fftconvolve(Alt_low_GTP(time), rf), 
+                                time.size) * tstep
+            elif source == 'Alt_high':
+                temp = np.resize(fftconvolve(Alt_high_GTP(time), rf), 
+                                time.size) * tstep
             return temp[0::slice_step]
         
 
@@ -293,7 +299,6 @@ def ch42co2(t, CH4tau=12.4, alpha=0.51):
     function with the methane emission profile gives the CO2 emission profile.
     
     t: time
-    CH4tau: adjusted lifetime of methane
     alpha: fraction of methane converted to CO2
     """
     #ch4tau = 12.4
@@ -446,8 +451,8 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                 rf = ch4_atmos * ch4_re + co2_atmos * co2_re
             
                 # Additional forcing from cc-fb
-                if cc_fb == True: 
-
+                if cc_fb == True: #I need to set up cc_fb for MC still
+				    #Accounting for uncertainty through normal distribution
                     cc_co2 = CH4_cc_tempforrf(emiss, time) * gamma * ccfb_dist[count]
                     cc_co2_atmos = np.resize(fftconvolve(CO2_AR5(time), cc_co2),
                                       time.size) * tstep
@@ -507,6 +512,13 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
             
                     full_output = results[0::slice_step]
 
+                #elif kind == 'CRF':
+                #    crf = cumtrapz(results, dx = tstep, initial = 0, axis=0)
+                #    output['mean'] = np.mean(crf[0::slice_step], axis=1)
+                #    output['-sigma'] = output['mean'] - np.std(crf[0::slice_step], axis=1)
+                #    output['+sigma'] = output['mean'] + np.std(crf[0::slice_step], axis=1)
+            
+                #    full_output = crf[0::slice_step]
             
                 return output, full_output
         
@@ -579,10 +591,9 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
             
                 rf = ch4_atmos * ch4_re
             
-            
-                # Additional forcing from cc-fb
-                if cc_fb == True: 
-
+                # Additional CO2 emissions from cc-fb
+                if cc_fb == True: #I need to set up cc_fb for MC still
+				    #Accounting for uncertainty through normal distribution
                     cc_co2 = CH4_cc_tempforrf(emiss, time) * gamma * ccfb_dist[count]
                     cc_co2_atmos = np.resize(fftconvolve(CO2_AR5(time), cc_co2),
                                       time.size) * tstep
@@ -615,7 +626,12 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
                     output['+sigma'] = output['mean'] + np.std(results[0::slice_step], 
                                                                 axis=1)
 
-
+                #elif kind == 'CRF':
+                #    crf = cumtrapz(results, dx = tstep, initial = 0, axis=0)
+                #    output['mean'] = np.mean(crf[0::slice_step], axis=1)
+                #    output['-sigma'] = output['mean'] - np.std(crf[0::slice_step], axis=1)
+                #    output['+sigma'] = output['mean'] + np.std(crf[0::slice_step], axis=1)
+                
                 return output
     
             elif full_output == True:
@@ -637,7 +653,14 @@ def CH4(emission, years, tstep=0.01, kind='RF', interpolation='linear', source='
             
                     full_output = results[0::slice_step]
 
-
+                #elif kind == 'CRF':
+                #    crf = cumtrapz(results, dx = tstep, initial = 0, axis=0)
+                #    output['mean'] = np.mean(crf[0::slice_step], axis=1)
+                #    output['-sigma'] = output['mean'] - np.std(crf[0::slice_step], axis=1)
+                #    output['+sigma'] = output['mean'] + np.std(crf[0::slice_step], axis=1)
+            
+                #    full_output = crf[0::slice_step]
+            
                 return output, full_output
                 
         # No CH4 decay, no MC
@@ -701,6 +724,11 @@ def CH4_cc_tempforrf(emission, years, tstep=0.01, kind='linear', source='AR5',
         rf = ch4_atmos * ch4_re
     if source == 'AR5':
         temp = np.resize(fftconvolve(AR5_GTP(time), rf), time.size) * tstep
-
+    elif source == 'Alt':
+        temp = np.resize(fftconvolve(Alt_GTP(time), rf), time.size) * tstep
+    elif source == 'Alt_low':
+        temp = np.resize(fftconvolve(Alt_low_GTP(time), rf), time.size) * tstep
+    elif source == 'Alt_high':
+        temp = np.resize(fftconvolve(Alt_high_GTP(time), rf), time.size) * tstep
     
     return temp
